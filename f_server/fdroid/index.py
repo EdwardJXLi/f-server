@@ -63,10 +63,15 @@ def build_index_payload(session: Session, settings: Settings, timestamp: int | N
                         "targetSdkVersion": version.target_sdk or version.min_sdk or 1,
                     },
                     "signer": {"sha256": [version.signer_fingerprint]},
-                    "usesPermission": [{"name": permission} for permission in version.permissions],
+                    "usesPermission": version.permission_details
+                    or [{"name": permission} for permission in version.permissions],
+                    "usesPermissionSdk23": version.permissions_sdk23,
+                    "features": [{"name": feature} for feature in version.features],
                     "nativecode": version.nativecode,
                 },
             }
+            if version.max_sdk is not None:
+                versions[version.sha256_hash]["manifest"]["maxSdkVersion"] = version.max_sdk
             if version.release_channel != "release":
                 channel = version.release_channel
                 versions[version.sha256_hash]["releaseChannels"] = [channel]
@@ -149,6 +154,16 @@ def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) 
                     "versionName": manifest["versionName"],
                     "minSdkVersion": manifest["usesSdk"]["minSdkVersion"],
                     "targetSdkVersion": manifest["usesSdk"]["targetSdkVersion"],
+                    "maxSdkVersion": manifest.get("maxSdkVersion"),
+                    "uses-permission": [
+                        [permission["name"], permission.get("maxSdkVersion")]
+                        for permission in manifest["usesPermission"]
+                    ],
+                    "uses-permission-sdk-23": [
+                        [permission["name"], permission.get("maxSdkVersion")]
+                        for permission in manifest["usesPermissionSdk23"]
+                    ],
+                    "features": [feature["name"] for feature in manifest["features"]],
                     "nativecode": manifest["nativecode"],
                     "signer": manifest["signer"]["sha256"][0],
                 }

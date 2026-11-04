@@ -87,6 +87,13 @@ class Version(Base):
         ),
     )
     permissions: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JsonType), default=list)
+    permission_details: Mapped[list[dict[str, str | int]]] = mapped_column(
+        MutableList.as_mutable(JsonType), default=list
+    )
+    permissions_sdk23: Mapped[list[dict[str, str | int]]] = mapped_column(
+        MutableList.as_mutable(JsonType), default=list
+    )
+    features: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JsonType), default=list)
     signer_fingerprint: Mapped[str] = mapped_column(String(64))
     release_channel: Mapped[str] = mapped_column(String(64), default="release")
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

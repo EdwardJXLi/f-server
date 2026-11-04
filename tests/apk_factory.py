@@ -31,6 +31,8 @@ def build_signed_apk(
     version_name: str,
     signer_name: str,
     nativecode: tuple[str, ...] = (),
+    max_sdk: int | None = None,
+    manifest_elements: str = "",
 ) -> Path:
     variant = "_".join(nativecode) or "universal"
     apk_dir = workdir / f"{package_name}-{version_code}-{signer_name}-{variant}"
@@ -38,10 +40,12 @@ def build_signed_apk(
     apk_dir.mkdir(parents=True, exist_ok=True)
     signer_dir.mkdir(parents=True, exist_ok=True)
     manifest = apk_dir / "AndroidManifest.xml"
+    max_sdk_attribute = f' android:maxSdkVersion="{max_sdk}"' if max_sdk is not None else ""
     manifest.write_text(
         f"""<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{package_name}" android:versionCode="{version_code}" android:versionName="{version_name}">
-    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35" />
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35"{max_sdk_attribute} />
     <uses-permission android:name="android.permission.INTERNET" />
+    {manifest_elements}
     <application android:label="Fixture" />
 </manifest>
 """,

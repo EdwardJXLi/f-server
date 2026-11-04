@@ -93,11 +93,12 @@ def test_multi_arch_migration_preserves_existing_versions(tmp_path, monkeypatch)
 
     with pytest.raises(RuntimeError, match="additional architecture variants"):
         command.downgrade(config, "0002_registry_settings")
-    with Session(engine) as session:
-        variant = session.get(Version, variant_id)
-        assert variant.nativecode == ["arm64-v8a"]
-        session.delete(variant)
-        session.commit()
+    with engine.begin() as connection:
+        versions = sa.Table("versions", sa.MetaData(), autoload_with=connection)
+        assert connection.scalar(
+            sa.select(versions.c.nativecode).where(versions.c.id == variant_id)
+        ) == ["arm64-v8a"]
+        connection.execute(versions.delete().where(versions.c.id == variant_id))
     command.downgrade(config, "0002_registry_settings")
     command.upgrade(config, "head")
     with Session(engine) as session:

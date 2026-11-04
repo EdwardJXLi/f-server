@@ -160,6 +160,9 @@ def upload_apk(
             nativecode=list(info.nativecode),
             nativecode_key=nativecode_key,
             permissions=list(info.permissions),
+            permission_details=list(info.permission_details),
+            permissions_sdk23=list(info.permissions_sdk23),
+            features=list(info.features),
             signer_fingerprint=info.signer_fingerprint,
             release_channel=parsed_metadata.release_channel,
         )
@@ -246,9 +249,18 @@ def _apply_apk_info(version: Version, info: ApkInfo) -> bool:
         "max_sdk": info.max_sdk,
         "nativecode": list(info.nativecode),
         "permissions": list(info.permissions),
+        "permission_details": list(info.permission_details)
+        or [{"name": name} for name in info.permissions],
+        "permissions_sdk23": list(info.permissions_sdk23),
+        "features": list(info.features),
     }
     for field, value in fields.items():
-        if getattr(version, field) != value:
+        previous = getattr(version, field)
+        if previous is None and field == "permission_details":
+            previous = [{"name": name} for name in version.permissions]
+        elif previous is None and field in {"permissions_sdk23", "features"}:
+            previous = []
+        if previous != value:
             setattr(version, field, value)
             if field == "nativecode":
                 version.nativecode_key = nativecode_identity(value)
