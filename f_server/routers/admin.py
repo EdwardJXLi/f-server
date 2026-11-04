@@ -111,6 +111,7 @@ def delete_version(
     session.delete(version)
     session.commit()
     rebuild_repo(session)
+    session.commit()
     return RedirectResponse(f"/admin/apps/{package_name}", status_code=303)
 
 
@@ -135,6 +136,7 @@ def delete_app(
     session.delete(app)
     session.commit()
     rebuild_repo(session)
+    session.commit()
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -177,6 +179,7 @@ def rebuild(
 ):
     try:
         rebuild_repo(session)
+        session.commit()
     except SigningConfigurationError as exc:
         return templates.TemplateResponse(
             request,

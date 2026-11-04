@@ -57,6 +57,7 @@ def rebuild() -> None:
     with SessionLocal() as session:
         for key in rebuild_repo(session):
             typer.echo(key)
+        session.commit()
 
 
 @app.command("init")

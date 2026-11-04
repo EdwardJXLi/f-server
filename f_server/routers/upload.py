@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Annotated
@@ -54,6 +53,7 @@ def upload_apk(
     metadata: Annotated[str | None, Form()] = None,
     icon: Annotated[UploadFile | None, File()] = None,
     screenshots: Annotated[list[UploadFile] | None, File()] = None,
+    locale: Annotated[str, Form(pattern=r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")] = "en-US",
     api_key: ApiKey = Depends(require_api_key),
     session: Session = Depends(get_session),
 ) -> UploadResponse:
@@ -77,7 +77,7 @@ def upload_apk(
             audit_event(session, request, api_key.label, "upload", None, None, "422-unparsable")
             raise HTTPException(status_code=422, detail=f"unparsable APK: {exc}") from exc
 
-        _authorize_scope(session, request, api_key, info)
+        _authorize_package(session, request, api_key, info.package_name, info.version_code)
         digest = sha256.hexdigest()
         nativecode_key = nativecode_identity(info.nativecode)
         existing = session.scalar(
@@ -170,15 +170,42 @@ def upload_apk(
         app.last_updated = utcnow()
         app.suggested_version_code = max(app.suggested_version_code or 0, info.version_code)
         if icon is not None:
-            _store_icon(session, icon, app.package_name)
+            _store_icon(session, icon, app.package_name, locale)
         if screenshots:
-            _store_screenshots(session, screenshots, app.package_name)
+            _store_screenshots(session, screenshots, app.package_name, locale)
         session.commit()
         session.refresh(version)
         index_files = rebuild_repo(session)
         audit_event(session, request, api_key.label, "upload", info.package_name, info.version_code, "201")
         notify_app_published(app, version, settings.repo, settings.notifications)
         return _response("created", version, index_files)
+
+
+@router.post("/packages/{package_name}/artwork")
+def upload_artwork(
+    package_name: str,
+    request: Request,
+    icon: Annotated[UploadFile | None, File()] = None,
+    screenshots: Annotated[list[UploadFile] | None, File()] = None,
+    locale: Annotated[str, Form(pattern=r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")] = "en-US",
+    api_key: ApiKey = Depends(require_api_key),
+    session: Session = Depends(get_session),
+) -> dict:
+    _authorize_package(session, request, api_key, package_name)
+    app = session.get(App, package_name)
+    if app is None:
+        raise HTTPException(status_code=404, detail="package not found")
+    if icon is None and not screenshots:
+        raise HTTPException(status_code=422, detail="provide icon or screenshots")
+    if icon is not None:
+        _store_icon(session, icon, package_name, locale)
+    if screenshots:
+        _store_screenshots(session, screenshots, package_name, locale)
+    app.last_updated = utcnow()
+    session.commit()
+    index_files = rebuild_repo(session)
+    audit_event(session, request, api_key.label, "artwork", package_name, None, "200")
+    return {"status": "updated", "packageName": package_name, "indexFiles": index_files}
 
 
 @router.get("/packages/{package_name}")
@@ -220,12 +247,15 @@ def _parse_metadata(raw: str | None) -> UploadMetadata:
         raise HTTPException(status_code=422, detail=f"invalid metadata JSON: {exc}") from exc
 
 
-def _authorize_scope(session: Session, request: Request, api_key: ApiKey, info: ApkInfo) -> None:
+def _authorize_package(
+    session: Session, request: Request, api_key: ApiKey,
+    package_name: str, version_code: int | None = None,
+) -> None:
     if "upload" not in api_key.permissions:
-        audit_event(session, request, api_key.label, "upload", info.package_name, info.version_code, "403-permission")
+        audit_event(session, request, api_key.label, "upload", package_name, version_code, "403-permission")
         raise HTTPException(status_code=403, detail="API key cannot upload")
-    if not package_allowed(api_key, info.package_name):
-        audit_event(session, request, api_key.label, "upload", info.package_name, info.version_code, "403-scope")
+    if not package_allowed(api_key, package_name):
+        audit_event(session, request, api_key.label, "upload", package_name, version_code, "403-scope")
         raise HTTPException(status_code=403, detail="package is outside API key scope")
 
 
@@ -268,25 +298,48 @@ def _apply_apk_info(version: Version, info: ApkInfo) -> bool:
     return changed
 
 
-def _store_icon(session: Session, icon: UploadFile, package_name: str) -> None:
+def _store_icon(session: Session, icon: UploadFile, package_name: str, locale: str = "en-US") -> None:
     suffix = Path(icon.filename or "icon.png").suffix or ".png"
-    key = f"repo/{package_name}/en-US/icon{suffix}"
-    with tempfile.SpooledTemporaryFile(max_size=1024 * 1024 * 4) as tmp:
-        shutil.copyfileobj(icon.file, tmp)
-        tmp.seek(0)
-        get_storage().put(key, tmp, icon.content_type or "application/octet-stream")
-    session.add(Asset(package_name=package_name, locale="en-US", kind="icon", storage_key=key))
+    key = f"repo/{package_name}/{locale}/icon{suffix}"
+    _store_asset(session, icon, package_name, locale, "icon", key)
 
 
-def _store_screenshots(session: Session, screenshots: list[UploadFile], package_name: str) -> None:
+def _store_screenshots(
+    session: Session, screenshots: list[UploadFile], package_name: str, locale: str = "en-US"
+) -> None:
     for index, screenshot in enumerate(screenshots, start=1):
         suffix = Path(screenshot.filename or "screenshot.png").suffix or ".png"
-        key = f"repo/{package_name}/en-US/phoneScreenshots/{index:02d}{suffix}"
-        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024 * 8) as tmp:
-            shutil.copyfileobj(screenshot.file, tmp)
-            tmp.seek(0)
-            get_storage().put(key, tmp, screenshot.content_type or "application/octet-stream")
-        session.add(Asset(package_name=package_name, locale="en-US", kind="screenshot", storage_key=key))
+        key = f"repo/{package_name}/{locale}/phoneScreenshots/{index:02d}{suffix}"
+        _store_asset(session, screenshot, package_name, locale, "screenshot", key)
+
+
+def _store_asset(
+    session: Session, upload: UploadFile, package_name: str, locale: str, kind: str, key: str
+) -> None:
+    digest = hashlib.sha256()
+    size = 0
+    with tempfile.SpooledTemporaryFile(max_size=1024 * 1024 * 8) as tmp:
+        while chunk := upload.file.read(1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+            tmp.write(chunk)
+        tmp.seek(0)
+        get_storage().put(key, tmp, upload.content_type or "application/octet-stream")
+    criteria = [Asset.package_name == package_name, Asset.locale == locale, Asset.kind == kind]
+    if kind != "icon":
+        criteria.append(Asset.storage_key == key)
+    matches = session.scalars(
+        select(Asset).where(*criteria).order_by(Asset.id.desc())
+    ).all()
+    asset = matches[0] if matches else Asset(
+        package_name=package_name, locale=locale, kind=kind, storage_key=key
+    )
+    for duplicate in matches[1:]:
+        session.delete(duplicate)
+    asset.storage_key = key
+    asset.sha256_hash = digest.hexdigest()
+    asset.size = size
+    session.add(asset)
 
 
 def _response(status_text: str, version: Version, index_files: list[str]) -> UploadResponse:

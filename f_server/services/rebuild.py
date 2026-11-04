@@ -19,7 +19,7 @@ def rebuild_repo(session: Session) -> list[str]:
     storage = get_storage()
     with _lock, tempfile.TemporaryDirectory(prefix="f-server-repo-") as tmp:
         repodir = Path(tmp) / "repo"
-        files = write_unsigned_indexes(session, settings, repodir)
+        files = write_unsigned_indexes(session, settings, repodir, storage=storage)
         files.extend(sign_indexes(repodir, settings))
         uploaded = []
         for path in files:

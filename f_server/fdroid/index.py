@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from f_server.config import Settings
 from f_server.models import App
+from f_server.services.artwork import SCREENSHOT_TYPES, localized_artwork
+from f_server.storage import get_storage
+from f_server.storage.base import StorageBackend
 
 
 def _epoch_ms(dt: datetime | None) -> int:
@@ -38,11 +41,16 @@ def _repo(settings: Settings, timestamp: int) -> dict[str, Any]:
     }
 
 
-def build_index_payload(session: Session, settings: Settings, timestamp: int | None = None) -> dict[str, Any]:
+def build_index_payload(
+    session: Session, settings: Settings, timestamp: int | None = None,
+    *, storage: StorageBackend | None = None,
+) -> dict[str, Any]:
     ts = timestamp or int(time.time() * 1000)
     repo = _repo(settings, ts)
     apps = session.scalars(
-        select(App).options(selectinload(App.versions), selectinload(App.signing_keys)).order_by(App.package_name)
+        select(App).options(
+            selectinload(App.versions), selectinload(App.signing_keys), selectinload(App.assets)
+        ).order_by(App.package_name)
     ).all()
     packages: dict[str, Any] = {}
     for app in apps:
@@ -94,14 +102,21 @@ def build_index_payload(session: Session, settings: Settings, timestamp: int | N
             metadata["issueTracker"] = app.issue_url
         if app.signing_keys:
             metadata["preferredSigner"] = app.signing_keys[0].sha256_fingerprint
+        if app.assets:
+            if storage is None:
+                storage = get_storage()
+            metadata.update(localized_artwork(app, storage))
         packages[app.package_name] = {"metadata": metadata, "versions": versions}
     return {"repo": repo, "packages": packages}
 
 
-def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) -> list[Path]:
+def write_unsigned_indexes(
+    session: Session, settings: Settings, repodir: Path,
+    *, storage: StorageBackend | None = None,
+) -> list[Path]:
     repodir.mkdir(parents=True, exist_ok=True)
     (repodir / "diff").mkdir(exist_ok=True)
-    payload = build_index_payload(session, settings)
+    payload = build_index_payload(session, settings, storage=storage)
     index_path = repodir / "index-v2.json"
     index_path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     entry = {
@@ -138,6 +153,17 @@ def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) 
                 ),
             }
         )
+        localized = {}
+        for kind in ("icon", "featureGraphic", "promoGraphic", "tvBanner"):
+            for locale, entry in meta.get(kind, {}).items():
+                localized.setdefault(locale, {})[kind] = Path(entry["name"]).name
+        for kind, screen_type in SCREENSHOT_TYPES.items():
+            if kind == "screenshot":
+                continue
+            for locale, images in meta.get("screenshots", {}).get(screen_type, {}).items():
+                localized.setdefault(locale, {})[kind] = [Path(image["name"]).name for image in images]
+        if localized:
+            v1_apps[-1]["localized"] = localized
         if not item["versions"]:
             continue
         v1_packages[package_name] = []

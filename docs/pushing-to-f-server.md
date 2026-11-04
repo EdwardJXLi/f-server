@@ -30,6 +30,11 @@ Multipart fields:
 
 - `icon` optional file. Stored as the app icon asset.
 - `screenshots` optional repeated file field. Stored as localized phone screenshot assets.
+- `locale` optional artwork locale, such as `en-US` or `de`. The default is `en-US`.
+
+To upload artwork without an APK, send the same artwork fields to `POST /api/v1/packages/{packageName}/artwork`.
+This endpoint requires an upload key scoped to the existing package. Both indexes reference the uploaded icons and screenshots.
+The v2 localized file entries include repository paths, SHA-256 hashes, and byte sizes.
 
 `release_channel` defaults to `release` for new APKs. Use `Beta` for beta releases, with this exact capitalization.
 Other channel names are published as supplied. Stable APKs have no version-level `releaseChannels` in `index-v2.json`.

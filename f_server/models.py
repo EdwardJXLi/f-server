@@ -119,6 +119,8 @@ class Asset(Base):
     locale: Mapped[str] = mapped_column(String(16), default="en-US")
     kind: Mapped[str] = mapped_column(String(64))
     storage_key: Mapped[str] = mapped_column(String(1024))
+    sha256_hash: Mapped[str | None] = mapped_column(String(64))
+    size: Mapped[int | None] = mapped_column(Integer)
 
     app: Mapped[App] = relationship(back_populates="assets")
 
