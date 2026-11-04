@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from f_server.auth.api_keys import audit_event, package_allowed, require_api_key
 from f_server.config import get_settings
 from f_server.db import get_session
-from f_server.fdroid.parse import ApkInfo, parse_apk
+from f_server.fdroid.parse import ApkInfo, ApkVerificationUnavailable, parse_apk
 from f_server.models import ApiKey, App, Asset, Version, nativecode_identity, utcnow
 from f_server.security.pinning import pin_first_signer, signer_allowed
 from f_server.services.notifications import notify_app_published
@@ -71,6 +71,8 @@ def upload_apk(
                 out.write(chunk)
         try:
             info = parse_apk(tmp_apk)
+        except ApkVerificationUnavailable as exc:
+            raise HTTPException(status_code=503, detail="APK signature verification is unavailable") from exc
         except Exception as exc:
             audit_event(session, request, api_key.label, "upload", None, None, "422-unparsable")
             raise HTTPException(status_code=422, detail=f"unparsable APK: {exc}") from exc

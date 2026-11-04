@@ -1,10 +1,33 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fdroidserver import common
+
+
+class ApkVerificationUnavailable(RuntimeError):
+    """Raised when APK signature verification cannot run."""
+
+
+def verify_apk_signature(path: str | Path) -> None:
+    apksigner = shutil.which("apksigner")
+    if apksigner is None:
+        raise ApkVerificationUnavailable("apksigner is required to verify APK signatures")
+    try:
+        result = subprocess.run(
+            [apksigner, "verify", str(path)],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ApkVerificationUnavailable("could not complete APK signature verification") from exc
+    if result.returncode != 0:
+        raise ValueError("APK signature verification failed")
 
 
 @dataclass(frozen=True)
@@ -32,6 +55,7 @@ def _safe_int(value: Any) -> int | None:
 
 def parse_apk(path: str | Path) -> ApkInfo:
     apk_path = str(path)
+    verify_apk_signature(apk_path)
     package_name, version_code, version_name = common.get_apk_id(apk_path)
     cert = common.get_first_signer_certificate(apk_path)
     if not cert:

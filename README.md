@@ -154,6 +154,7 @@ Every upload must pass both checks:
 
 Set `uploads.verify_signing_keys=false` or `FS_UPLOADS__VERIFY_SIGNING_KEYS=false` only if package scope is sufficient for your deployment. With verification disabled, f-server still records each APK signer but does not reject signer changes.
 
+Every uploaded APK must pass `apksigner verify`. Uploads require `apksigner` and Java, including deployments that do not sign repository indexes.
 The Android signing key is never uploaded to f-server.
 
 ## CI integration

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,10 +18,53 @@ from f_server.main import create_app
 from f_server.fdroid.parse import parse_apk
 from f_server.models import AllowedSigningKey, App, AuditLog, Version, nativecode_identity
 from f_server.storage.local import LocalStorage
-from tests.apk_factory import android_tools_available, build_signed_apk
+from tests.apk_factory import BUILD_TOOLS, JBR, android_tools_available, build_signed_apk
 
 
 pytestmark = pytest.mark.skipif(not android_tools_available(), reason="Android SDK/JBR tools are unavailable")
+
+
+@pytest.fixture(autouse=True)
+def android_tool_environment(monkeypatch):
+    monkeypatch.setenv("PATH", f"{BUILD_TOOLS}:{JBR / 'bin'}:{os.environ.get('PATH', '')}")
+
+
+@pytest.mark.parametrize("verify_signing_keys", [True, False])
+def test_tampered_upload_is_rejected_before_package_creation(
+    tmp_path, monkeypatch, verify_signing_keys
+) -> None:
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        uploads=UploadsConfig(verify_signing_keys=verify_signing_keys),
+    )
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def override_session():
+        with testing_session() as session:
+            yield session
+
+    monkeypatch.setattr("f_server.routers.upload.get_settings", lambda: settings)
+    monkeypatch.setattr("f_server.main.create_all", lambda: None)
+    app = create_app()
+    app.dependency_overrides[get_session] = override_session
+    package_name = "com.example.tampered"
+    apk = build_signed_apk(tmp_path / "apks", package_name, 1, "1.0", "signer")
+    with ZipFile(apk, "a") as archive:
+        archive.writestr("assets/altered.txt", b"altered after signing")
+    with testing_session() as session:
+        key = create_api_key(session, "fixture", [package_name]).secret
+    with TestClient(app) as client:
+        response = _upload(client, apk, key)
+    assert response.status_code == 422
+    with testing_session() as session:
+        assert session.get(App, package_name) is None
+        assert session.scalar(select(Version)) is None
 
 
 def test_real_apk_upload_tofu_idempotency_scope_and_cert_mismatch(tmp_path, monkeypatch) -> None:

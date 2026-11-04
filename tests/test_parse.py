@@ -27,6 +27,7 @@ def test_parse_apk_uses_native_abis_not_android_libraries(monkeypatch, tmp_path)
     apk_path = tmp_path / "fixture.apk"
     apk_path.write_bytes(b"apk")
 
+    monkeypatch.setattr("f_server.fdroid.parse.verify_apk_signature", lambda path: None)
     monkeypatch.setattr("f_server.fdroid.parse.common.get_apk_id", lambda path: ("com.example.app", 1, "1.0"))
     monkeypatch.setattr("f_server.fdroid.parse.common.get_first_signer_certificate", lambda path: b"cert")
     monkeypatch.setattr("f_server.fdroid.parse.common.signer_fingerprint", lambda cert: "a" * 64)

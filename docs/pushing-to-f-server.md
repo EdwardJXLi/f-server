@@ -86,6 +86,7 @@ curl --fail-with-body \
 ## Behavior agents must understand
 
 - First push uses scoped trust-on-first-use. If the package is new and the API key scope allows it, f-server creates the app and pins the APK signing certificate fingerprint.
+- Every APK must pass `apksigner verify` before metadata is accepted. Disabling signing-key pinning does not disable signature verification.
 - Later pushes must be signed by a pinned certificate. A leaked API key cannot publish a differently signed APK.
 - Re-uploading the same `(packageName, versionCode, signer, ABI set)` is idempotent and returns the stored APK. ABI order does not affect identity.
 - Re-uploading an identical APK can refresh parsed metadata. A different binary for an existing variant leaves the stored APK and its metadata unchanged.
