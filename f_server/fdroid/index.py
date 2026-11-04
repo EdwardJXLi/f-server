@@ -128,6 +128,7 @@ def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) 
                     "versionName": manifest["versionName"],
                     "minSdkVersion": manifest["usesSdk"]["minSdkVersion"],
                     "targetSdkVersion": manifest["usesSdk"]["targetSdkVersion"],
+                    "nativecode": manifest["nativecode"],
                     "sig": manifest["signer"]["sha256"][0],
                 }
             )

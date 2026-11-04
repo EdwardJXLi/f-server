@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from zipfile import ZipFile
 
 ANDROID_SDK = Path("/home/hydra/Code/Android/SDK")
 JBR = Path("/opt/android-studio/jbr")
@@ -29,8 +30,10 @@ def build_signed_apk(
     version_code: int,
     version_name: str,
     signer_name: str,
+    nativecode: tuple[str, ...] = (),
 ) -> Path:
-    apk_dir = workdir / f"{package_name}-{version_code}-{signer_name}"
+    variant = "_".join(nativecode) or "universal"
+    apk_dir = workdir / f"{package_name}-{version_code}-{signer_name}-{variant}"
     signer_dir = workdir / signer_name
     apk_dir.mkdir(parents=True, exist_ok=True)
     signer_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +68,9 @@ def build_signed_apk(
         stderr=subprocess.PIPE,
         text=True,
     )
+    with ZipFile(unsigned, "a") as archive:
+        for abi in nativecode:
+            archive.writestr(f"lib/{abi}/libfixture.so", b"fixture native library")
     if not keystore.exists():
         subprocess.run(
             [

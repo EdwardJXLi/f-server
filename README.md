@@ -160,6 +160,9 @@ The Android signing key is never uploaded to f-server.
 
 See [docs/pushing-to-f-server.md](docs/pushing-to-f-server.md) for the full upload contract, GitHub Actions job, curl snippet, and error remediation table.
 
+Upload architecture-specific APKs separately. Different ABI sets can share a package name, version code, and signer.
+The server detects ABIs from each APK and publishes each variant in both F-Droid indexes.
+
 ## Podman deployment
 
 ```sh

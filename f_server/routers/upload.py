@@ -9,14 +9,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from f_server.auth.api_keys import audit_event, package_allowed, require_api_key
 from f_server.config import get_settings
 from f_server.db import get_session
 from f_server.fdroid.parse import ApkInfo, parse_apk
-from f_server.models import ApiKey, App, Asset, Version, utcnow
+from f_server.models import ApiKey, App, Asset, Version, nativecode_identity, utcnow
 from f_server.security.pinning import pin_first_signer, signer_allowed
 from f_server.services.notifications import notify_app_published
 from f_server.services.rebuild import rebuild_repo
@@ -43,6 +43,7 @@ class UploadResponse(BaseModel):
     apkName: str
     sha256: str
     size: int
+    nativecode: list[str] = Field(default_factory=list)
     indexFiles: list[str] = Field(default_factory=list)
 
 
@@ -76,15 +77,20 @@ def upload_apk(
 
         _authorize_scope(session, request, api_key, info)
         digest = sha256.hexdigest()
+        nativecode_key = nativecode_identity(info.nativecode)
         existing = session.scalar(
-            select(Version).where(
+            select(Version)
+            .where(
                 Version.package_name == info.package_name,
                 Version.version_code == info.version_code,
                 Version.signer_fingerprint == info.signer_fingerprint,
+                or_(Version.nativecode_key == nativecode_key, Version.sha256_hash == digest),
             )
+            .order_by((Version.sha256_hash == digest).desc())
+            .limit(1)
         )
         if existing:
-            metadata_changed = _apply_apk_info(existing, info)
+            metadata_changed = existing.sha256_hash == digest and _apply_apk_info(existing, info)
             if metadata_changed:
                 session.flush()
                 index_files = rebuild_repo(session)
@@ -124,7 +130,7 @@ def upload_apk(
         else:
             _update_app_metadata(app, parsed_metadata)
 
-        apk_name = f"{info.package_name}_{info.version_code}_{info.signer_fingerprint[:7]}.apk"
+        apk_name = f"{info.package_name}_{info.version_code}_{digest}.apk"
         storage_key = f"repo/{apk_name}"
         with tmp_apk.open("rb") as fp:
             get_storage().put(storage_key, fp, "application/vnd.android.package-archive")
@@ -141,6 +147,7 @@ def upload_apk(
             target_sdk=info.target_sdk,
             max_sdk=info.max_sdk,
             nativecode=list(info.nativecode),
+            nativecode_key=nativecode_key,
             permissions=list(info.permissions),
             signer_fingerprint=info.signer_fingerprint,
             release_channel=parsed_metadata.release_channel,
@@ -183,6 +190,7 @@ def get_package(package_name: str, session: Session = Depends(get_session)) -> d
                 "size": v.size,
                 "signer": v.signer_fingerprint,
                 "releaseChannel": v.release_channel,
+                "nativecode": v.nativecode,
             }
             for v in versions
         ],
@@ -231,6 +239,8 @@ def _apply_apk_info(version: Version, info: ApkInfo) -> bool:
     for field, value in fields.items():
         if getattr(version, field) != value:
             setattr(version, field, value)
+            if field == "nativecode":
+                version.nativecode_key = nativecode_identity(value)
             changed = True
     return changed
 
@@ -266,5 +276,6 @@ def _response(status_text: str, version: Version, index_files: list[str]) -> Upl
         apkName=version.apk_name,
         sha256=version.sha256_hash,
         size=version.size,
+        nativecode=version.nativecode,
         indexFiles=index_files,
     )

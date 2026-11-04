@@ -31,6 +31,15 @@ Multipart fields:
 - `icon` optional file. Stored as the app icon asset.
 - `screenshots` optional repeated file field. Stored as localized phone screenshot assets.
 
+## Architecture variants
+
+Upload each architecture APK in a separate request to the same endpoint. The server reads the supported ABIs from each APK.
+No additional multipart fields are required. APKs with different ABI sets can share a package name, version code, and signer.
+An APK that contains several ABIs is one variant. An APK with no native libraries is a universal variant.
+
+Upload responses and package version entries include a `nativecode` array, for example `["arm64-v8a"]` or `[]` for universal APKs.
+Both F-Droid indexes include this array for each APK. Existing APK names and download URLs remain valid.
+
 ## GitHub Actions job
 
 ```yaml
@@ -48,13 +57,15 @@ jobs:
           FSERVER_URL: https://f-server.example.com
           FSERVER_API_KEY: ${{ secrets.FSERVER_API_KEY }}
         run: |
-          apk="$(find dist -name '*.apk' -print -quit)"
-          test -n "$apk"
-          curl --fail-with-body \
-            -H "Authorization: Bearer ${FSERVER_API_KEY}" \
-            -F "apk=@${apk};type=application/vnd.android.package-archive" \
-            -F 'metadata={"release_channel":"release"}' \
-            "${FSERVER_URL}/api/v1/upload"
+          mapfile -d '' apks < <(find dist -type f -name '*.apk' -print0)
+          test "${#apks[@]}" -gt 0
+          for apk in "${apks[@]}"; do
+            curl --fail-with-body \
+              -H "Authorization: Bearer ${FSERVER_API_KEY}" \
+              -F "apk=@${apk};type=application/vnd.android.package-archive" \
+              -F 'metadata={"release_channel":"release"}' \
+              "${FSERVER_URL}/api/v1/upload"
+          done
 ```
 
 ## Raw curl
@@ -71,7 +82,8 @@ curl --fail-with-body \
 
 - First push uses scoped trust-on-first-use. If the package is new and the API key scope allows it, f-server creates the app and pins the APK signing certificate fingerprint.
 - Later pushes must be signed by a pinned certificate. A leaked API key cannot publish a differently signed APK.
-- Re-uploading the same `(packageName, versionCode, signer)` is idempotent and returns the existing version.
+- Re-uploading the same `(packageName, versionCode, signer, ABI set)` is idempotent and returns the stored APK. ABI order does not affect identity.
+- Re-uploading an identical APK can refresh parsed metadata. A different binary for an existing variant leaves the stored APK and its metadata unchanged.
 - The Android signing key is never sent to f-server. Only the APK's public signing certificate fingerprint is extracted.
 
 ## Responses and failures

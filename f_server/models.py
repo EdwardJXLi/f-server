@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
@@ -16,6 +19,11 @@ def utcnow() -> datetime:
 
 
 JsonType = JSON().with_variant(JSONB, "postgresql")
+
+
+def nativecode_identity(nativecode: Iterable[str]) -> str:
+    encoded = json.dumps(sorted(set(nativecode)), separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 class App(Base):
@@ -72,6 +80,12 @@ class Version(Base):
     target_sdk: Mapped[int | None] = mapped_column(Integer)
     max_sdk: Mapped[int | None] = mapped_column(Integer)
     nativecode: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JsonType), default=list)
+    nativecode_key: Mapped[str] = mapped_column(
+        String(64),
+        default=lambda context: nativecode_identity(
+            context.get_current_parameters().get("nativecode") or []
+        ),
+    )
     permissions: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JsonType), default=list)
     signer_fingerprint: Mapped[str] = mapped_column(String(64))
     release_channel: Mapped[str] = mapped_column(String(64), default="release")
@@ -80,7 +94,13 @@ class Version(Base):
     app: Mapped[App] = relationship(back_populates="versions")
 
     __table_args__ = (
-        UniqueConstraint("package_name", "version_code", "signer_fingerprint", name="uq_version_signer"),
+        UniqueConstraint(
+            "package_name",
+            "version_code",
+            "signer_fingerprint",
+            "nativecode_key",
+            name="uq_version_signer_nativecode",
+        ),
     )
 
 

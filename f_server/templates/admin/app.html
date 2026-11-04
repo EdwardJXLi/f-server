@@ -13,12 +13,13 @@
     </form>
     <h2>Versions</h2>
     <table>
-      <thead><tr><th>Code</th><th>Name</th><th>APK</th><th>Signer</th><th></th></tr></thead>
+      <thead><tr><th>Code</th><th>Name</th><th>Architectures</th><th>APK</th><th>Signer</th><th></th></tr></thead>
       <tbody>
       {% for version in app.versions | sort(attribute="version_code", reverse=True) %}
         <tr>
           <td>{{ version.version_code }}</td>
           <td>{{ version.version_name or "" }}</td>
+          <td>{{ version.nativecode | join(', ') if version.nativecode else "Universal" }}</td>
           <td><code>{{ version.apk_name }}</code></td>
           <td><code>{{ version.signer_fingerprint[:12] }}</code></td>
           <td>

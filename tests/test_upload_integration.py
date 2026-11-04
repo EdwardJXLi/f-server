@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -12,7 +13,8 @@ from f_server.auth.api_keys import create_api_key
 from f_server.config import RepoConfig, Settings, StorageConfig, UploadsConfig
 from f_server.db import Base, get_session
 from f_server.main import create_app
-from f_server.models import AllowedSigningKey, App, AuditLog, Version
+from f_server.fdroid.parse import parse_apk
+from f_server.models import AllowedSigningKey, App, AuditLog, Version, nativecode_identity
 from f_server.storage.local import LocalStorage
 from tests.apk_factory import android_tools_available, build_signed_apk
 
@@ -155,6 +157,139 @@ def test_upload_can_disable_signing_key_verification(tmp_path, monkeypatch) -> N
         assert len(versions) == 2
         assert not session.scalar(select(AllowedSigningKey).where(AllowedSigningKey.package_name == package_name))
         assert not session.scalar(select(AuditLog).where(AuditLog.result == "422-cert"))
+
+
+def test_architecture_variants_preserve_legacy_uploads_and_downloads(tmp_path, monkeypatch) -> None:
+    settings = Settings(database_url="sqlite:///:memory:", repo=RepoConfig())
+    storage = LocalStorage(tmp_path / "storage")
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    def override_session():
+        with testing_session() as session:
+            yield session
+
+    monkeypatch.setattr("f_server.routers.upload.get_settings", lambda: settings)
+    monkeypatch.setattr("f_server.routers.upload.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.routers.repo.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.routers.admin.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.services.rebuild.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.services.rebuild.get_settings", lambda: settings)
+    monkeypatch.setattr("f_server.main.create_all", lambda: None)
+    notifications = []
+    monkeypatch.setattr(
+        "f_server.routers.upload.notify_app_published",
+        lambda app, version, *args: notifications.append(version.id),
+    )
+    app = create_app()
+    app.dependency_overrides[get_session] = override_session
+
+    package_name = "com.example.architectures"
+    legacy_apk = build_signed_apk(
+        tmp_path / "apks", package_name, 1, "1.0", "signer-one", ("arm64-v8a",)
+    )
+    info = parse_apk(legacy_apk)
+    legacy_name = f"{package_name}_1_{info.signer_fingerprint[:7]}.apk"
+    legacy_digest = hashlib.sha256(legacy_apk.read_bytes()).hexdigest()
+    with legacy_apk.open("rb") as fp:
+        storage.put(f"repo/{legacy_name}", fp, "application/vnd.android.package-archive")
+    with testing_session() as session:
+        session.add(App(package_name=package_name, name="Architectures", categories=[]))
+        session.flush()
+        session.add(AllowedSigningKey(
+            package_name=package_name, sha256_fingerprint=info.signer_fingerprint
+        ))
+        session.add(Version(
+            package_name=package_name,
+            version_code=1,
+            version_name="1.0",
+            apk_name=legacy_name,
+            storage_key=f"repo/{legacy_name}",
+            size=legacy_apk.stat().st_size,
+            sha256_hash=legacy_digest,
+            signer_fingerprint=info.signer_fingerprint,
+            nativecode=["androidx.window.extensions"],
+        ))
+        key = create_api_key(session, "architectures", [package_name]).secret
+
+    variants = [(), ("x86_64",), ("arm64-v8a", "x86_64")]
+    apks = [
+        build_signed_apk(tmp_path / "apks", package_name, 1, "1.0", "signer-one", abis)
+        for abis in variants
+    ]
+    with TestClient(app) as client:
+        legacy = _upload(client, legacy_apk, key)
+        assert legacy.status_code == 200
+        assert legacy.json()["status"] == "exists"
+        assert legacy.json()["apkName"] == legacy_name
+        assert legacy.json()["nativecode"] == ["arm64-v8a"]
+        assert legacy.json()["indexFiles"]
+        expected = {legacy_digest: (["arm64-v8a"], legacy_name, legacy_apk)}
+        for abis, apk in zip(variants, apks, strict=True):
+            created = _upload(client, apk, key)
+            assert created.status_code == 200
+            body = created.json()
+            assert body["status"] == "created"
+            assert body["nativecode"] == list(abis)
+            expected[body["sha256"]] = (list(abis), body["apkName"], apk)
+            repeated = _upload(client, apk, key)
+            assert repeated.json()["status"] == "exists"
+            assert repeated.json()["apkName"] == body["apkName"]
+            assert repeated.json()["indexFiles"] == []
+        assert len(notifications) == 3
+        assert len({name for _, name, _ in expected.values()}) == 4
+        rebuilt_apk = build_signed_apk(
+            tmp_path / "apks", package_name, 1, "rebuilt", "signer-one", ("x86_64", "arm64-v8a")
+        )
+        rebuilt = _upload(client, rebuilt_apk, key)
+        assert rebuilt.json()["status"] == "exists"
+        assert rebuilt.json()["versionName"] == "1.0"
+        assert rebuilt.json()["sha256"] in expected
+        assert rebuilt.json()["indexFiles"] == []
+        assert len(notifications) == 3
+
+        package = client.get(f"/api/v1/packages/{package_name}").json()
+        assert len(package["versions"]) == 4
+        assert {v["sha256"]: v["nativecode"] for v in package["versions"]} == {
+            digest: abis for digest, (abis, _, _) in expected.items()
+        }
+        v2 = client.get("/repo/index-v2.json").json()["packages"][package_name]["versions"]
+        v1 = client.get("/repo/index-v1.json").json()["packages"][package_name]
+        assert set(v2) == set(expected)
+        assert {v["hash"]: v["nativecode"] for v in v1} == {
+            digest: abis for digest, (abis, _, _) in expected.items()
+        }
+        for digest, (abis, name, apk) in expected.items():
+            assert v2[digest]["manifest"]["versionCode"] == 1
+            assert v2[digest]["manifest"]["nativecode"] == abis
+            assert v2[digest]["file"]["name"] == f"/{name}"
+            downloaded = client.get(f"/repo/{name}")
+            assert downloaded.status_code == 200
+            assert downloaded.content == apk.read_bytes()
+
+        rejected_apk = build_signed_apk(
+            tmp_path / "apks", package_name, 1, "1.0", "signer-two", ("armeabi-v7a",)
+        )
+        assert _upload(client, rejected_apk, key).status_code == 422
+
+        with testing_session() as session:
+            versions = session.scalars(select(Version)).all()
+            assert len(versions) == 4
+            legacy_version = next(v for v in versions if v.apk_name == legacy_name)
+            assert legacy_version.nativecode_key == nativecode_identity(["arm64-v8a"])
+            x86_version = next(v for v in versions if v.nativecode == ["x86_64"])
+            deleted_name = x86_version.apk_name
+            deleted_id = x86_version.id
+        deleted = client.post(f"/admin/versions/{deleted_id}/delete", follow_redirects=False)
+        assert deleted.status_code == 303
+        assert client.get(f"/repo/{deleted_name}").status_code == 404
+        assert client.get(f"/repo/{legacy_name}").content == legacy_apk.read_bytes()
+        assert len(client.get(f"/api/v1/packages/{package_name}").json()["versions"]) == 3
 
 
 def _upload(
