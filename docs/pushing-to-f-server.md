@@ -31,6 +31,11 @@ Multipart fields:
 - `icon` optional file. Stored as the app icon asset.
 - `screenshots` optional repeated file field. Stored as localized phone screenshot assets.
 
+`release_channel` defaults to `release` for new APKs. Use `Beta` for beta releases, with this exact capitalization.
+Other channel names are published as supplied. Stable APKs have no version-level `releaseChannels` in `index-v2.json`.
+Each named channel appears in the repository channel definitions and on its versions.
+The v1 `suggestedVersionCode` is the highest stable version code, or `0` if there are no stable APKs.
+
 ## Architecture variants
 
 Upload each architecture APK in a separate request to the same endpoint. The server reads the supported ABIs from each APK.
@@ -84,6 +89,7 @@ curl --fail-with-body \
 - Later pushes must be signed by a pinned certificate. A leaked API key cannot publish a differently signed APK.
 - Re-uploading the same `(packageName, versionCode, signer, ABI set)` is idempotent and returns the stored APK. ABI order does not affect identity.
 - Re-uploading an identical APK can refresh parsed metadata. A different binary for an existing variant leaves the stored APK and its metadata unchanged.
+- For an identical APK, an explicit `release_channel` changes its channel and rebuilds the indexes. Omitting the field preserves its current channel.
 - The Android signing key is never sent to f-server. Only the APK's public signing certificate fingerprint is extracted.
 
 ## Responses and failures

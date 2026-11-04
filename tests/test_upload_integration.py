@@ -292,6 +292,101 @@ def test_architecture_variants_preserve_legacy_uploads_and_downloads(tmp_path, m
         assert len(client.get(f"/api/v1/packages/{package_name}").json()["versions"]) == 3
 
 
+def test_identical_apk_channel_changes_rebuild_indexes(tmp_path, monkeypatch) -> None:
+    settings = Settings(database_url="sqlite:///:memory:", repo=RepoConfig())
+    storage = LocalStorage(tmp_path / "storage")
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    def override_session():
+        with testing_session() as session:
+            yield session
+
+    monkeypatch.setattr("f_server.routers.upload.get_settings", lambda: settings)
+    monkeypatch.setattr("f_server.routers.upload.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.routers.repo.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.services.rebuild.get_storage", lambda: storage)
+    monkeypatch.setattr("f_server.services.rebuild.get_settings", lambda: settings)
+    monkeypatch.setattr("f_server.main.create_all", lambda: None)
+    notifications = []
+    monkeypatch.setattr(
+        "f_server.routers.upload.notify_app_published",
+        lambda app, version, *args: notifications.append(version.id),
+    )
+    app = create_app()
+    app.dependency_overrides[get_session] = override_session
+    package_name = "com.example.channels"
+    stable_apk = build_signed_apk(tmp_path / "apks", package_name, 1, "1.0", "signer")
+    beta_apk = build_signed_apk(
+        tmp_path / "apks", package_name, 2, "2.0", "signer", ("arm64-v8a", "x86_64")
+    )
+    with testing_session() as session:
+        key = create_api_key(session, "channels", [package_name]).secret
+
+    with TestClient(app) as client:
+        stable = _upload(client, stable_apk, key)
+        assert stable.status_code == 200
+        beta = _upload(client, beta_apk, key, {"release_channel": "Beta"})
+        assert beta.status_code == 200
+        beta_info = beta.json()
+        beta_hash = beta_info["sha256"]
+        versions = client.get(f"/api/v1/packages/{package_name}").json()["versions"]
+        assert {v["versionCode"]: v["releaseChannel"] for v in versions} == {1: "release", 2: "Beta"}
+        v2 = client.get("/repo/index-v2.json").json()
+        assert v2["repo"]["releaseChannels"]["Beta"] == {"name": {"en-US": "Beta"}}
+        assert v2["packages"][package_name]["versions"][beta_hash]["releaseChannels"] == ["Beta"]
+        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == 1
+
+        for metadata in [None, {}, {"summary": "Channel omitted"}, {"release_channel": "Beta"}]:
+            repeated = _upload(client, beta_apk, key, metadata)
+            assert repeated.status_code == 200
+            assert repeated.json()["status"] == "exists"
+            assert repeated.json()["indexFiles"] == []
+        versions = client.get(f"/api/v1/packages/{package_name}").json()["versions"]
+        assert versions[0]["releaseChannel"] == "Beta"
+
+        different_apk = build_signed_apk(
+            tmp_path / "apks", package_name, 2, "rebuilt", "signer", ("x86_64", "arm64-v8a")
+        )
+        different = _upload(client, different_apk, key, {"release_channel": "release"})
+        assert different.status_code == 200
+        assert different.json()["sha256"] == beta_hash
+        assert different.json()["indexFiles"] == []
+        versions = client.get(f"/api/v1/packages/{package_name}").json()["versions"]
+        assert versions[0]["releaseChannel"] == "Beta"
+
+        promoted = _upload(client, beta_apk, key, {"release_channel": "release"})
+        assert promoted.status_code == 200
+        assert promoted.json()["status"] == "exists"
+        assert promoted.json()["indexFiles"] == [
+            "repo/index-v2.json", "repo/entry.json", "repo/index-v1.json"
+        ]
+        assert promoted.json()["sha256"] == beta_hash
+        assert promoted.json()["apkName"] == beta_info["apkName"]
+        v2 = client.get("/repo/index-v2.json").json()
+        assert v2["packages"][package_name]["versions"][beta_hash].get("releaseChannels", []) == []
+        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == 2
+        versions = client.get(f"/api/v1/packages/{package_name}").json()["versions"]
+        assert versions[0]["releaseChannel"] == "release"
+        assert client.get(f"/repo/{beta_info['apkName']}").content == beta_apk.read_bytes()
+
+        for apk in [beta_apk, stable_apk]:
+            demoted = _upload(client, apk, key, {"release_channel": "Beta"})
+            assert demoted.status_code == 200
+            assert demoted.json()["indexFiles"]
+        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == 0
+        v2 = client.get("/repo/index-v2.json").json()
+        assert all(v["releaseChannels"] == ["Beta"] for v in v2["packages"][package_name]["versions"].values())
+        assert len(notifications) == 2
+    with testing_session() as session:
+        assert len(session.scalars(select(Version)).all()) == 2
+
+
 def _upload(
     client: TestClient,
     apk_path,

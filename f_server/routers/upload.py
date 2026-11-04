@@ -90,7 +90,16 @@ def upload_apk(
             .limit(1)
         )
         if existing:
-            metadata_changed = existing.sha256_hash == digest and _apply_apk_info(existing, info)
+            metadata_changed = False
+            if existing.sha256_hash == digest:
+                metadata_changed = _apply_apk_info(existing, info)
+                if (
+                    "release_channel" in parsed_metadata.model_fields_set
+                    and existing.release_channel != parsed_metadata.release_channel
+                ):
+                    existing.release_channel = parsed_metadata.release_channel
+                    existing.app.last_updated = utcnow()
+                    metadata_changed = True
             if metadata_changed:
                 session.flush()
                 index_files = rebuild_repo(session)

@@ -40,6 +40,7 @@ def _repo(settings: Settings, timestamp: int) -> dict[str, Any]:
 
 def build_index_payload(session: Session, settings: Settings, timestamp: int | None = None) -> dict[str, Any]:
     ts = timestamp or int(time.time() * 1000)
+    repo = _repo(settings, ts)
     apps = session.scalars(
         select(App).options(selectinload(App.versions), selectinload(App.signing_keys)).order_by(App.package_name)
     ).all()
@@ -66,6 +67,10 @@ def build_index_payload(session: Session, settings: Settings, timestamp: int | N
                     "nativecode": version.nativecode,
                 },
             }
+            if version.release_channel != "release":
+                channel = version.release_channel
+                versions[version.sha256_hash]["releaseChannels"] = [channel]
+                repo.setdefault("releaseChannels", {})[channel] = {"name": {"en-US": channel}}
         metadata: dict[str, Any] = {
             "name": {"en-US": app.name or app.package_name},
             "summary": {"en-US": app.summary or ""},
@@ -85,7 +90,7 @@ def build_index_payload(session: Session, settings: Settings, timestamp: int | N
         if app.signing_keys:
             metadata["preferredSigner"] = app.signing_keys[0].sha256_fingerprint
         packages[app.package_name] = {"metadata": metadata, "versions": versions}
-    return {"repo": _repo(settings, ts), "packages": packages}
+    return {"repo": repo, "packages": packages}
 
 
 def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) -> list[Path]:
@@ -113,6 +118,14 @@ def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) 
                 "name": meta.get("name", {}).get("en-US", package_name),
                 "summary": meta.get("summary", {}).get("en-US", ""),
                 "description": meta.get("description", {}).get("en-US", ""),
+                "suggestedVersionCode": max(
+                    (
+                        v["manifest"]["versionCode"]
+                        for v in item["versions"].values()
+                        if not v.get("releaseChannels")
+                    ),
+                    default=0,
+                ),
             }
         )
         v1_packages[package_name] = []
