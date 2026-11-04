@@ -385,7 +385,7 @@ def test_identical_apk_channel_changes_rebuild_indexes(tmp_path, monkeypatch) ->
         v2 = client.get("/repo/index-v2.json").json()
         assert v2["repo"]["releaseChannels"]["Beta"] == {"name": {"en-US": "Beta"}}
         assert v2["packages"][package_name]["versions"][beta_hash]["releaseChannels"] == ["Beta"]
-        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == 1
+        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == "1"
 
         for metadata in [None, {}, {"summary": "Channel omitted"}, {"release_channel": "Beta"}]:
             repeated = _upload(client, beta_apk, key, metadata)
@@ -415,7 +415,7 @@ def test_identical_apk_channel_changes_rebuild_indexes(tmp_path, monkeypatch) ->
         assert promoted.json()["apkName"] == beta_info["apkName"]
         v2 = client.get("/repo/index-v2.json").json()
         assert v2["packages"][package_name]["versions"][beta_hash].get("releaseChannels", []) == []
-        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == 2
+        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == "2"
         versions = client.get(f"/api/v1/packages/{package_name}").json()["versions"]
         assert versions[0]["releaseChannel"] == "release"
         assert client.get(f"/repo/{beta_info['apkName']}").content == beta_apk.read_bytes()
@@ -424,7 +424,7 @@ def test_identical_apk_channel_changes_rebuild_indexes(tmp_path, monkeypatch) ->
             demoted = _upload(client, apk, key, {"release_channel": "Beta"})
             assert demoted.status_code == 200
             assert demoted.json()["indexFiles"]
-        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == 0
+        assert client.get("/repo/index-v1.json").json()["apps"][0]["suggestedVersionCode"] == "0"
         v2 = client.get("/repo/index-v2.json").json()
         assert all(v["releaseChannels"] == ["Beta"] for v in v2["packages"][package_name]["versions"].values())
         assert len(notifications) == 2

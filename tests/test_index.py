@@ -45,6 +45,14 @@ def test_build_index_payload_contains_versions(tmp_path) -> None:
 
         files = write_unsigned_indexes(session, Settings(), tmp_path / "repo")
         assert {path.name for path in files} == {"entry.json", "index-v1.json", "index-v2.json"}
+        v1 = json.loads((tmp_path / "repo" / "index-v1.json").read_text())
+        assert isinstance(v1["repo"]["name"], str)
+        assert isinstance(v1["repo"]["description"], str)
+        assert isinstance(v1["repo"]["icon"], str)
+        assert v1["repo"]["version"] == 20002
+        assert v1["apps"][0]["license"] == "Unknown"
+        assert v1["packages"][app.package_name][0]["packageName"] == app.package_name
+        assert v1["packages"][app.package_name][0]["signer"] == "a" * 64
 
 
 @pytest.mark.parametrize(
@@ -104,4 +112,4 @@ def test_release_channels_control_suggested_versions(
     assert max((v["manifest"]["versionCode"] for v in stable), default=0) == stable_code
     assert max((v["manifest"]["versionCode"] for v in with_beta), default=0) == beta_code
     v1 = json.loads((repodir / "index-v1.json").read_text())
-    assert v1["apps"][0]["suggestedVersionCode"] == stable_code
+    assert v1["apps"][0]["suggestedVersionCode"] == str(stable_code)

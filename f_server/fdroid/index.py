@@ -57,10 +57,10 @@ def build_index_payload(session: Session, settings: Settings, timestamp: int | N
                 },
                 "manifest": {
                     "versionCode": version.version_code,
-                    "versionName": version.version_name,
+                    "versionName": version.version_name or str(version.version_code),
                     "usesSdk": {
-                        "minSdkVersion": version.min_sdk,
-                        "targetSdkVersion": version.target_sdk or version.min_sdk,
+                        "minSdkVersion": version.min_sdk or 1,
+                        "targetSdkVersion": version.target_sdk or version.min_sdk or 1,
                     },
                     "signer": {"sha256": [version.signer_fingerprint]},
                     "usesPermission": [{"name": permission} for permission in version.permissions],
@@ -118,22 +118,30 @@ def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) 
                 "name": meta.get("name", {}).get("en-US", package_name),
                 "summary": meta.get("summary", {}).get("en-US", ""),
                 "description": meta.get("description", {}).get("en-US", ""),
-                "suggestedVersionCode": max(
-                    (
-                        v["manifest"]["versionCode"]
-                        for v in item["versions"].values()
-                        if not v.get("releaseChannels")
-                    ),
-                    default=0,
+                "license": meta.get("license", "Unknown"),
+                "added": meta["added"],
+                "lastUpdated": meta["lastUpdated"],
+                "suggestedVersionCode": str(
+                    max(
+                        (
+                            v["manifest"]["versionCode"]
+                            for v in item["versions"].values()
+                            if not v.get("releaseChannels")
+                        ),
+                        default=0,
+                    )
                 ),
             }
         )
+        if not item["versions"]:
+            continue
         v1_packages[package_name] = []
         for version in item["versions"].values():
             manifest = version["manifest"]
             v1_packages[package_name].append(
                 {
                     "apkName": version["file"]["name"].lstrip("/"),
+                    "packageName": package_name,
                     "hash": version["file"]["sha256"],
                     "hashType": "sha256",
                     "size": version["file"]["size"],
@@ -142,13 +150,25 @@ def write_unsigned_indexes(session: Session, settings: Settings, repodir: Path) 
                     "minSdkVersion": manifest["usesSdk"]["minSdkVersion"],
                     "targetSdkVersion": manifest["usesSdk"]["targetSdkVersion"],
                     "nativecode": manifest["nativecode"],
-                    "sig": manifest["signer"]["sha256"][0],
+                    "signer": manifest["signer"]["sha256"][0],
                 }
             )
     v1_path = repodir / "index-v1.json"
     v1_path.write_text(
         json.dumps(
-            {"repo": payload["repo"], "requests": {"install": [], "uninstall": []}, "apps": v1_apps, "packages": v1_packages},
+            {
+                "repo": {
+                    "timestamp": payload["repo"]["timestamp"],
+                    "version": 20002,
+                    "name": settings.repo.name,
+                    "description": settings.repo.description,
+                    "address": settings.repo.url.rstrip("/"),
+                    "icon": settings.repo.icon or "",
+                },
+                "requests": {"install": [], "uninstall": []},
+                "apps": v1_apps,
+                "packages": v1_packages,
+            },
             ensure_ascii=False,
             separators=(",", ":"),
         ),

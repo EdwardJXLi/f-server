@@ -34,7 +34,7 @@ Multipart fields:
 `release_channel` defaults to `release` for new APKs. Use `Beta` for beta releases, with this exact capitalization.
 Other channel names are published as supplied. Stable APKs have no version-level `releaseChannels` in `index-v2.json`.
 Each named channel appears in the repository channel definitions and on its versions.
-The v1 `suggestedVersionCode` is the highest stable version code, or `0` if there are no stable APKs.
+The v1 `suggestedVersionCode` is the highest stable version code as a string, or `"0"` if there are no stable APKs.
 
 ## Architecture variants
 
