@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -19,6 +19,7 @@ def utcnow() -> datetime:
 
 
 JsonType = JSON().with_variant(JSONB, "postgresql")
+DictJsonType = JSON().with_variant(JSONB, "postgresql")
 
 
 def nativecode_identity(nativecode: Iterable[str]) -> str:
@@ -38,6 +39,8 @@ class App(Base):
     web_url: Mapped[str | None] = mapped_column(String(1024))
     source_url: Mapped[str | None] = mapped_column(String(1024))
     issue_url: Mapped[str | None] = mapped_column(String(1024))
+    translation_url: Mapped[str | None] = mapped_column(String(1024))
+    localized: Mapped[dict] = mapped_column(MutableDict.as_mutable(DictJsonType), default=dict)
     categories: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JsonType), default=list)
     icon_ref: Mapped[str | None] = mapped_column(String(1024))
     added: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -96,6 +99,7 @@ class Version(Base):
     features: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JsonType), default=list)
     signer_fingerprint: Mapped[str] = mapped_column(String(64))
     release_channel: Mapped[str] = mapped_column(String(64), default="release")
+    whats_new: Mapped[dict] = mapped_column(MutableDict.as_mutable(DictJsonType), default=dict)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     app: Mapped[App] = relationship(back_populates="versions")

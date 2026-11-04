@@ -41,6 +41,46 @@ Other channel names are published as supplied. Stable APKs have no version-level
 Each named channel appears in the repository channel definitions and on its versions.
 The v1 `suggestedVersionCode` is the highest stable version code as a string, or `"0"` if there are no stable APKs.
 
+## Rich metadata and partial updates
+
+Upload metadata also accepts these app fields: `license`, `author`, `web_url`, `source_url`, `issue_url`, `translation_url`, `localized`, and `added`.
+The `localized` map contains locale keys and optional `name`, `summary`, and `description` values.
+Use `translation_url` for the app's translation service link.
+
+Version fields are `release_channel`, `changelog`, `whats_new`, and `released_at`.
+The `whats_new` map contains localized release notes. The existing `changelog` field supplies English (`en-US`) notes.
+An explicit `whats_new["en-US"]` takes precedence over `changelog`.
+The v2 index preserves notes for each APK. The v1 index publishes localized notes for the suggested stable version.
+
+Use `added` for the app's original publication date and `released_at` for the APK's original release date.
+Both accept ISO 8601 dates or Unix timestamps in milliseconds. Dates without a timezone use UTC.
+
+These JSON endpoints update existing records without an APK:
+
+```text
+PATCH /api/v1/packages/{packageName}/metadata
+PATCH /api/v1/packages/{packageName}/versions/{sha256}/metadata
+```
+
+Both require a bearer key with upload permission for the package. The version endpoint selects one APK by its SHA-256 hash.
+Send app fields to the first endpoint and version fields to the second.
+For example, an app metadata update can contain:
+
+```json
+{
+  "license": "GPL-3.0-only",
+  "author": "Example Author",
+  "source_url": "https://example.com/source",
+  "localized": {"de": {"summary": "Eine kurze Beschreibung"}},
+  "added": "2020-01-02T00:00:00Z"
+}
+```
+
+Omitted fields stay unchanged. Localized updates merge by locale and field.
+Use `null` to clear optional text or a localized entry. A supplied categories array replaces the previous categories.
+Identical updates return `"status":"unchanged"` with an empty `indexFiles` array.
+Changed updates return `"status":"updated"` after rebuilding the indexes. Neither endpoint replaces stored APK bytes.
+
 ## Architecture variants
 
 Upload each architecture APK in a separate request to the same endpoint. The server reads the supported ABIs from each APK.

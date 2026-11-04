@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,8 @@ from f_server.storage.base import StorageBackend
 def _epoch_ms(dt: datetime | None) -> int:
     if dt is None:
         return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1000)
 
 
@@ -80,6 +82,8 @@ def build_index_payload(
             }
             if version.max_sdk is not None:
                 versions[version.sha256_hash]["manifest"]["maxSdkVersion"] = version.max_sdk
+            if version.whats_new:
+                versions[version.sha256_hash]["whatsNew"] = version.whats_new
             if version.release_channel != "release":
                 channel = version.release_channel
                 versions[version.sha256_hash]["releaseChannels"] = [channel]
@@ -100,6 +104,14 @@ def build_index_payload(
             metadata["sourceCode"] = app.source_url
         if app.issue_url:
             metadata["issueTracker"] = app.issue_url
+        if app.author:
+            metadata["authorName"] = app.author
+        if app.translation_url:
+            metadata["translation"] = app.translation_url
+        for locale, localized in (app.localized or {}).items():
+            for field in ("name", "summary", "description"):
+                if field in localized:
+                    metadata[field][locale] = localized[field]
         if app.signing_keys:
             metadata["preferredSigner"] = app.signing_keys[0].sha256_fingerprint
         if app.assets:
@@ -154,6 +166,18 @@ def write_unsigned_indexes(
             }
         )
         localized = {}
+        for field in ("name", "summary", "description"):
+            for locale, text in meta[field].items():
+                localized.setdefault(locale, {})[field] = text
+        for field in ("authorName", "webSite", "sourceCode", "issueTracker", "translation", "categories"):
+            if field in meta:
+                v1_apps[-1][field] = meta[field]
+        suggested_code = int(v1_apps[-1]["suggestedVersionCode"])
+        for version in item["versions"].values():
+            if version["manifest"]["versionCode"] == suggested_code and not version.get("releaseChannels"):
+                for locale, text in version.get("whatsNew", {}).items():
+                    localized.setdefault(locale, {})["whatsNew"] = text
+                break
         for kind in ("icon", "featureGraphic", "promoGraphic", "tvBanner"):
             for locale, entry in meta.get(kind, {}).items():
                 localized.setdefault(locale, {})[kind] = Path(entry["name"]).name

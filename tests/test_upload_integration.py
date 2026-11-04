@@ -391,7 +391,10 @@ def test_identical_apk_channel_changes_rebuild_indexes(tmp_path, monkeypatch) ->
             repeated = _upload(client, beta_apk, key, metadata)
             assert repeated.status_code == 200
             assert repeated.json()["status"] == "exists"
-            assert repeated.json()["indexFiles"] == []
+            if metadata and "summary" in metadata:
+                assert repeated.json()["indexFiles"]
+            else:
+                assert repeated.json()["indexFiles"] == []
         versions = client.get(f"/api/v1/packages/{package_name}").json()["versions"]
         assert versions[0]["releaseChannel"] == "Beta"
 

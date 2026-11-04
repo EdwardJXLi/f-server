@@ -17,20 +17,14 @@ from f_server.db import get_session
 from f_server.fdroid.parse import ApkInfo, ApkVerificationUnavailable, parse_apk
 from f_server.models import ApiKey, App, Asset, Version, nativecode_identity, utcnow
 from f_server.security.pinning import pin_first_signer, signer_allowed
+from f_server.services.metadata import (
+    AppMetadata, UploadMetadata, VersionMetadata, apply_app_metadata, apply_version_metadata,
+)
 from f_server.services.notifications import notify_app_published
 from f_server.services.rebuild import rebuild_repo
 from f_server.storage import get_storage
 
 router = APIRouter(prefix="/api/v1", tags=["upload"])
-
-
-class UploadMetadata(BaseModel):
-    name: str | None = None
-    summary: str | None = None
-    description: str | None = None
-    categories: list[str] = Field(default_factory=list)
-    changelog: str | None = None
-    release_channel: str = "release"
 
 
 class UploadResponse(BaseModel):
@@ -95,13 +89,11 @@ def upload_apk(
             metadata_changed = False
             if existing.sha256_hash == digest:
                 metadata_changed = _apply_apk_info(existing, info)
-                if (
-                    "release_channel" in parsed_metadata.model_fields_set
-                    and existing.release_channel != parsed_metadata.release_channel
-                ):
-                    existing.release_channel = parsed_metadata.release_channel
+                app_changed = apply_app_metadata(existing.app, parsed_metadata)
+                version_changed = apply_version_metadata(existing, parsed_metadata)
+                if version_changed:
                     existing.app.last_updated = utcnow()
-                    metadata_changed = True
+                metadata_changed = metadata_changed or app_changed or version_changed
             if metadata_changed:
                 session.flush()
                 index_files = rebuild_repo(session)
@@ -133,13 +125,14 @@ def upload_apk(
             )
             session.add(app)
             session.flush()
+            apply_app_metadata(app, parsed_metadata)
             if verify_signing_keys:
                 pin_first_signer(session, app, info.signer_fingerprint, api_key.label)
         elif verify_signing_keys and not signer_allowed(session, info.package_name, info.signer_fingerprint):
             audit_event(session, request, api_key.label, "upload", info.package_name, info.version_code, "422-cert")
             raise HTTPException(status_code=422, detail="APK signing certificate does not match pinned package key")
         else:
-            _update_app_metadata(app, parsed_metadata)
+            apply_app_metadata(app, parsed_metadata)
 
         apk_name = f"{info.package_name}_{info.version_code}_{digest}.apk"
         storage_key = f"repo/{apk_name}"
@@ -167,6 +160,7 @@ def upload_apk(
             release_channel=parsed_metadata.release_channel,
         )
         session.add(version)
+        apply_version_metadata(version, parsed_metadata)
         app.last_updated = utcnow()
         app.suggested_version_code = max(app.suggested_version_code or 0, info.version_code)
         if icon is not None:
@@ -208,6 +202,66 @@ def upload_artwork(
     return {"status": "updated", "packageName": package_name, "indexFiles": index_files}
 
 
+@router.patch("/packages/{package_name}/metadata")
+def update_package_metadata(
+    package_name: str,
+    metadata: AppMetadata,
+    request: Request,
+    api_key: ApiKey = Depends(require_api_key),
+    session: Session = Depends(get_session),
+) -> dict:
+    _authorize_package(session, request, api_key, package_name)
+    app = session.get(App, package_name)
+    if app is None:
+        raise HTTPException(status_code=404, detail="package not found")
+    changed = apply_app_metadata(app, metadata)
+    return _metadata_response(session, request, api_key, app, changed)
+
+
+@router.patch("/packages/{package_name}/versions/{sha256}/metadata")
+def update_version_metadata(
+    package_name: str,
+    sha256: str,
+    metadata: VersionMetadata,
+    request: Request,
+    api_key: ApiKey = Depends(require_api_key),
+    session: Session = Depends(get_session),
+) -> dict:
+    _authorize_package(session, request, api_key, package_name)
+    version = session.scalar(select(Version).where(
+        Version.package_name == package_name, Version.sha256_hash == sha256
+    ))
+    if version is None:
+        raise HTTPException(status_code=404, detail="version not found")
+    changed = apply_version_metadata(version, metadata)
+    if changed:
+        version.app.last_updated = utcnow()
+    return _metadata_response(session, request, api_key, version.app, changed, version)
+
+
+def _metadata_response(
+    session: Session, request: Request, api_key: ApiKey, app: App,
+    changed: bool, version: Version | None = None,
+) -> dict:
+    if changed:
+        session.flush()
+        index_files = rebuild_repo(session)
+    else:
+        index_files = []
+    session.commit()
+    audit_event(
+        session, request, api_key.label, "metadata", app.package_name,
+        version.version_code if version else None, "200",
+    )
+    result = {
+        "status": "updated" if changed else "unchanged",
+        "packageName": app.package_name, "indexFiles": index_files,
+    }
+    if version:
+        result["sha256"] = version.sha256_hash
+    return result
+
+
 @router.get("/packages/{package_name}")
 def get_package(package_name: str, session: Session = Depends(get_session)) -> dict:
     app = session.get(App, package_name)
@@ -222,6 +276,14 @@ def get_package(package_name: str, session: Session = Depends(get_session)) -> d
         "summary": app.summary,
         "description": app.description,
         "categories": app.categories,
+        "license": app.license,
+        "author": app.author,
+        "webUrl": app.web_url,
+        "sourceUrl": app.source_url,
+        "issueUrl": app.issue_url,
+        "translationUrl": app.translation_url,
+        "localized": app.localized,
+        "added": app.added,
         "versions": [
             {
                 "versionCode": v.version_code,
@@ -232,6 +294,8 @@ def get_package(package_name: str, session: Session = Depends(get_session)) -> d
                 "signer": v.signer_fingerprint,
                 "releaseChannel": v.release_channel,
                 "nativecode": v.nativecode,
+                "releasedAt": v.added_at,
+                "whatsNew": v.whats_new,
             }
             for v in versions
         ],
@@ -257,17 +321,6 @@ def _authorize_package(
     if not package_allowed(api_key, package_name):
         audit_event(session, request, api_key.label, "upload", package_name, version_code, "403-scope")
         raise HTTPException(status_code=403, detail="package is outside API key scope")
-
-
-def _update_app_metadata(app: App, metadata: UploadMetadata) -> None:
-    if metadata.name:
-        app.name = metadata.name
-    if metadata.summary:
-        app.summary = metadata.summary
-    if metadata.description:
-        app.description = metadata.description
-    if metadata.categories:
-        app.categories = metadata.categories
 
 
 def _apply_apk_info(version: Version, info: ApkInfo) -> bool:

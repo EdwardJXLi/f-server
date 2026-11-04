@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from f_server.auth.api_keys import create_api_key
@@ -149,8 +149,9 @@ def test_compatibility_migration_preserves_legacy_permission_names(tmp_path, mon
             added_at=now,
         ))
     command.upgrade(config, "0004_compatibility_metadata")
-    with Session(engine) as session:
-        version = session.get(Version, 1)
+    with engine.connect() as connection:
+        versions = sa.Table("versions", sa.MetaData(), autoload_with=connection)
+        version = connection.execute(sa.select(versions).where(versions.c.id == 1)).one()
         assert version.permissions == permissions
         assert version.permission_details == [{"name": name} for name in permissions]
         assert version.features == []
@@ -158,6 +159,6 @@ def test_compatibility_migration_preserves_legacy_permission_names(tmp_path, mon
         assert version.storage_key == "repo/legacy.apk"
     command.downgrade(config, "0003_multi_arch_packages")
     command.upgrade(config, "0004_compatibility_metadata")
-    with Session(engine) as session:
-        assert session.get(Version, 1).permissions == permissions
+    with engine.connect() as connection:
+        assert connection.scalar(sa.select(versions.c.permissions).where(versions.c.id == 1)) == permissions
     engine.dispose()
