@@ -196,6 +196,22 @@ code {
   word-break: break-all;
 }
 
+.signing-keys {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+}
+
+.signing-keys code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: block;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
+
 .notice {
   background: #fff8dc;
   border: 1px solid #e4c76b;

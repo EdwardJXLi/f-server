@@ -34,13 +34,11 @@
   </div>
   <aside>
     <h2>Trusted signing keys</h2>
-    <table>
-      <tbody>
+    <ul class="signing-keys">
       {% for key in app.signing_keys %}
-        <tr><td><code>{{ key.sha256_fingerprint }}</code></td></tr>
+      <li><code>{{ key.sha256_fingerprint }}</code></li>
       {% endfor %}
-      </tbody>
-    </table>
+    </ul>
     <form method="post" action="/admin/apps/{{ app.package_name }}/signing-keys">
       <label>SHA-256 fingerprint <input name="fingerprint" minlength="64" maxlength="95" required></label>
       <button type="submit">Add key</button>
